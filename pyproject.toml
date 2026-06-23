@@ -1,0 +1,216 @@
+"""Matplotlib visualizations for wrinkle risk outputs."""
+
+from __future__ import annotations
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from wrinkle_life_risk.risk_labels import RISK_LABELS, RISK_ORDER, RISK_PLOT_COLORS, normalize_risk_label
+
+
+RISK_COLORS = RISK_PLOT_COLORS
+
+
+def plot_risk_distribution(data: pd.DataFrame, score_column: str | None = None):
+    """Return a histogram figure for severity/risk scores."""
+
+    score_column = score_column or _priority_score_column(data) or "risk_score"
+    return _plot_numeric_distribution(
+        data,
+        column=score_column,
+        title="Severity dağılımı",
+        xlabel="Severity Index",
+        color="#4c78a8",
+    )
+
+
+def plot_theta_vs_measure(data: pd.DataFrame):
+    """Return a scatter figure of effective measure versus wrinkle angle."""
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+
+    classes = _ordered_risk_groups(data)
+
+    for risk_class, group, color in classes:
+        ax.scatter(
+            group["effective_measure"],
+            group["theta_degree"],
+            label=RISK_LABELS.get(str(risk_class), str(risk_class)),
+            color=color,
+            alpha=0.85,
+            edgecolors="white",
+            linewidths=0.6,
+        )
+
+    ax.set_title("Etkin ölçüye göre açısal sapma")
+    ax.set_xlabel("Etkin ölçü")
+    ax.set_ylabel("Açısal sapma derece")
+    ax.grid(alpha=0.25)
+    ax.legend(title="Risk sınıfı")
+    fig.tight_layout()
+    return fig
+
+
+def plot_risk_by_length(data: pd.DataFrame, length_column: str = "length"):
+    """Return a scatter figure of length versus severity score."""
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    score_column = _priority_score_column(data) or "risk_score"
+    classes = _ordered_risk_groups(data)
+
+    for risk_class, group, color in classes:
+        ax.scatter(
+            group[length_column],
+            group[score_column],
+            label=RISK_LABELS.get(str(risk_class), str(risk_class)),
+            color=color,
+            alpha=0.85,
+            edgecolors="white",
+            linewidths=0.6,
+        )
+
+    ax.set_title("Wrinkle uzunluğuna göre severity")
+    ax.set_xlabel("Uzunluk")
+    ax.set_ylabel("Severity Index")
+    ax.grid(alpha=0.25)
+    ax.legend(title="Risk sınıfı")
+    fig.tight_layout()
+    return fig
+
+
+def plot_delta_k_distribution(data: pd.DataFrame):
+    """Return a histogram figure for Delta K values."""
+
+    return _plot_numeric_distribution(
+        data,
+        column="Delta_K_MPa_sqrt_m",
+        title="Delta K dağılımı",
+        xlabel="Delta K (MPa√m)",
+        color="#6f4e7c",
+    )
+
+
+def plot_remaining_life_distribution(data: pd.DataFrame):
+    """Return a histogram figure for estimated life values."""
+
+    column = "Estimated_Life_Cycles" if "Estimated_Life_Cycles" in data.columns else "remaining_life_cycles"
+    return _plot_numeric_distribution(
+        data,
+        column=column,
+        title="Estimated life dağılımı",
+        xlabel="Estimated life cycles",
+        color="#587c7c",
+    )
+
+
+def plot_risk_class_counts(data: pd.DataFrame):
+    """Return a bar figure for risk class counts."""
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if "risk_class" not in data:
+        ax.text(0.5, 0.5, "Risk sınıfı yok", ha="center", va="center")
+        ax.set_axis_off()
+        return fig
+
+    counts = data["risk_class"].apply(normalize_risk_label).value_counts().reindex(RISK_ORDER).dropna()
+    labels = [RISK_LABELS.get(str(item), str(item)) for item in counts.index]
+    colors = [RISK_COLORS.get(str(item), "#4c78a8") for item in counts.index]
+    ax.bar(labels, counts.values, color=colors)
+    ax.set_title("Risk sınıfı sayıları")
+    ax.set_xlabel("Risk sınıfı")
+    ax.set_ylabel("Satır sayısı")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def plot_top_critical_defects(data: pd.DataFrame, id_column: str | None = None, top_n: int = 10):
+    """Return a horizontal bar chart for the highest severity defects."""
+
+    fig, ax = plt.subplots(figsize=(9, 5.2))
+    score_column = _priority_score_column(data)
+    if score_column is None or data[score_column].dropna().empty:
+        ax.text(0.5, 0.5, "Geçerli severity skoru yok", ha="center", va="center")
+        ax.set_axis_off()
+        return fig
+
+    frame = data.sort_values(score_column, ascending=False, na_position="last").head(top_n).copy()
+    if id_column is None or id_column not in frame.columns:
+        id_column = _find_id_column(frame)
+    labels = _safe_labels(frame, id_column)
+    colors = [RISK_COLORS.get(normalize_risk_label(value), "#4c78a8") for value in frame.get("risk_class", [])]
+
+    scores = pd.to_numeric(frame[score_column], errors="coerce").fillna(0.0)
+    ax.barh(labels, scores, color=colors if colors else "#4c78a8")
+    ax.invert_yaxis()
+    ax.set_title("En kritik 10 kusur")
+    ax.set_xlabel("Severity Index")
+    ax.set_ylabel("Kusur")
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_numeric_distribution(data: pd.DataFrame, column: str, title: str, xlabel: str, color: str):
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if column not in data:
+        ax.text(0.5, 0.5, f"{column} kolonu yok", ha="center", va="center")
+        ax.set_axis_off()
+        return fig
+
+    values = pd.to_numeric(data[column], errors="coerce").dropna()
+    if values.empty:
+        ax.text(0.5, 0.5, "Geçerli değer yok", ha="center", va="center")
+        ax.set_axis_off()
+        return fig
+
+    ax.hist(values, bins=min(12, max(4, len(values))), color=color, edgecolor="white")
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Kusur sayısı")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def _find_id_column(data: pd.DataFrame) -> str | None:
+    for column in ("Wrinkle_ID", "defect_id", "Row_ID"):
+        if column in data.columns:
+            return column
+    return None
+
+
+def _safe_labels(data: pd.DataFrame, id_column: str | None) -> list[str]:
+    if id_column is None or id_column not in data.columns:
+        values = data.index.to_series(index=data.index)
+    else:
+        values = data[id_column]
+
+    labels: list[str] = []
+    for position, value in enumerate(values, start=1):
+        if pd.isna(value) or str(value).strip() == "":
+            labels.append(f"Kusur {position}")
+        else:
+            labels.append(str(value))
+    return labels
+
+
+def _ordered_risk_groups(data: pd.DataFrame) -> list[tuple[str, pd.DataFrame, str]]:
+    if "risk_class" not in data:
+        return [("All", data, "#4c78a8")]
+
+    frame = data.copy()
+    frame["_normalized_risk_class"] = frame["risk_class"].apply(normalize_risk_label)
+    groups: list[tuple[str, pd.DataFrame, str]] = []
+    for risk_class in RISK_ORDER:
+        group = frame[frame["_normalized_risk_class"] == risk_class].drop(columns=["_normalized_risk_class"])
+        if not group.empty:
+            groups.append((risk_class, group, RISK_COLORS.get(risk_class, "#4c78a8")))
+    return groups
+
+
+def _priority_score_column(data: pd.DataFrame) -> str | None:
+    for column in ("Severity_Index", "Risk_Skor", "risk_score"):
+        if column in data.columns:
+            return column
+    return None
